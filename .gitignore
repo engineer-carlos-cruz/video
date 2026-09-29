@@ -1,0 +1,9 @@
+.venv/
+models/
+output/
+scripts/__pycache__/
+__pycache__/
+*.py[cod]
+*.wav
+*.apkg
+*.spotdl
