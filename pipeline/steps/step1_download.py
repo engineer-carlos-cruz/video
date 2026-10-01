@@ -11,13 +11,13 @@ import re
 import shutil
 import subprocess
 import sys
-import wave
 from abc import ABC, abstractmethod
 from pathlib import Path
 from urllib.parse import urlparse
 
 from pipeline.contracts import DownloadedAudio, Metadata
 from pipeline.errors import StepOutputError, UnsupportedURLError
+from pipeline.media import verify_wav
 
 YOUTUBE_PATTERNS = (
     r"(^|\.)youtube\.com$",
@@ -53,19 +53,7 @@ class AudioSource(ABC):
     @staticmethod
     def verify_wav(path: Path) -> None:
         """Sanity-check the produced file, raising on anything unusable."""
-        if not path.exists() or path.stat().st_size == 0:
-            raise StepOutputError(f"The downloaded file is missing or empty: {path}")
-        try:
-            with wave.open(str(path), "rb") as handle:
-                channels, rate, frames = (
-                    handle.getnchannels(),
-                    handle.getframerate(),
-                    handle.getnframes(),
-                )
-        except wave.Error as exc:
-            raise StepOutputError(f"{path} is not a readable WAV file: {exc}") from exc
-        if frames == 0 or rate == 0:
-            raise StepOutputError(f"{path} contains no audio samples")
+        verify_wav(path)
 
     def _require_ffmpeg(self) -> None:
         if shutil.which("ffmpeg") is None:
