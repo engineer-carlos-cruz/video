@@ -150,29 +150,29 @@ Detalle de los contratos:
 ## 7. Paso 5: Generación de fragmentos de audio por frase
 
 - **Entrada (`CleanedAudio` + `Phrases`):** audio limpio del paso 2 + frases con tiempos del paso 4.
-- **Salida (`Fragments`):** un archivo `.wav` por frase, con margen de ~100 ms antes y después del intervalo; cortes independientes (se permite solapamiento).
+- **Salida (`Fragments`):** un archivo `.wav` PCM por frase (`pcm_s16le`, mismo sample rate, canales y profundidad que el origen), con margen de ~100 ms antes y después del intervalo; cortes independientes (se permite solapamiento).
 - **Contexto:** volumen típico de ~100 frases por video.
 
 ### Solución (Paso 5)
 
 - **Base:** C vía FFmpeg.
-- **Enfoque principal:** una sola invocación de FFmpeg con múltiples salidas — un grafo `asplit` con una rama `atrim` por fragmento, cada una mapeada a su propio archivo. Escala bien para ~100 cortes sin overhead de un proceso por frase (medido: 100 fragmentos en 0.46 s).
+- **Enfoque principal:** una sola invocación de FFmpeg con múltiples salidas — un grafo `asplit` con una rama `atrim` por fragmento, cada una mapeada a su propio archivo. Escala bien para ~100 cortes sin overhead de un proceso por frase (medido: 100 fragmentos desde un wav de 2 minutos en menos de un segundo).
 - **Corte por índice de muestra, no por tiempo:** `atrim=start_sample=…:end_sample=…`, con los límites calculados en Python como `round(segundos × sample_rate)`.
-  - **Por qué no `-ss`/`-to`:** son exactos *con re-encodeo*, pero no con `-c:a copy`, que es lo queimplies "sin re-encodeo con pérdida" sobre una fuente ya pcm_s16le. Medido en FFmpeg 8.0.1, todo span volvía **2304 muestras (48 ms, un paquete PCM) más largo**: 1.0s..3.0s devolvía 2.048 s y 0.2537..0.7537 devolvía 0.512 s. La búsqueda se resuelve a granularidad de paquete y la cola nunca se recorta. Idéntico con `-ss` de entrada y de salida.
-  - `atrim` trabaja en índices de muestra, así que el resultado es **byte-exacto** contra el origen (verificado a 48 kHz/estéreo y 44.1 kHz/mono) y conserva el criterio 2 de forma literal.
+  - **Por qué no `-ss`/`-to`:** son exactos cuando el audio se re-encodea, pero no con `-c:a copy`. Medido en FFmpeg 8.0.1, todo span volvía **2304 muestras (48 ms, un paquete PCM) más largo**: 1.0s..3.0s devolvía 2.048 s y 0.2537..0.7537 devolvía 0.512 s. La búsqueda se resuelve a granularidad de paquete y un flujo wav se corta en fronteras de paquete, así que la cola nunca se recorta. Idéntico con `-ss` de entrada y de salida.
+  - **"Sin re-encodeo con pérdida" y corte exacto son compatibles:** la salida se escribe como `pcm_s16le` y una conversión PCM→PCM es **bit-exacta** (verificada byte a byte contra el origen a 48 kHz/estéreo y 44.1 kHz/mono). No interviene ningún códec con pérdida: solo cambia el framing a nivel de contenedor, nunca las muestras. Por eso `atrim` puede cumplir el requisito de no re-encodear *y* el criterio 2 al mismo tiempo, cosa que `-ss`/`-to` con `-c:a copy` no lograba.
   - Los límites se ajustan en Python **antes** de construir el filtergraph: un `atrim` que empieza más allá del EOF falla toda la invocación (exit 234) con un error por salida.
 - **Margen:** `start' = max(0, start − 0.1)`, `end' = min(duración, end + 0.1)`, en muestras.
 - **Módulo:** `step5_cut` → `run(CleanedAudio, Phrases) -> Fragments`.
 - **Nombrado:** `output/fragments/<video>/NNN_<slug>.wav`, donde `NNN` es la posición de la frase en `Phrases` y `<slug>` su texto saneado. El índice va por posición y no por contador de cortes exitosos: una frase omitida deja un hueco en vez de renombrar los archivos siguientes, y garantiza unicidad aunque dos frases tengan el mismo texto.
 - **Frases no cortables:** una frase fuera del audio (o con el span invertido) se reporta en `.skipped` con el motivo, no se descarta en silencio. Una frase de longitud cero **sí** se corta: el margen solo ya le da 200 ms.
 - **Verificación posterior:** el número de muestras de cada `.wav` se comprueba contra el esperado. Es el único fallo que llegaría al mazo de Anki como una tarjeta con el audio equivocado.
-- **Alternativa documentada:** rebanado PCM directo en Python (`wave`/`numpy`) calculando `index = round(segundos × sample_rate)`, byte-exacto, si el número de cortes crece mucho. No implementado: 100 cortes tardan 0.46 s en una sola invocación, así que no hay nada que ganar.
+- **Alternativa documentada:** rebanado PCM directo en Python (`wave`/`numpy`) calculando `index = round(segundos × sample_rate)`, byte-exacto, si el número de cortes crece mucho. No implementado: 100 cortes tardan menos de un segundo en una sola invocación, así que no hay nada que ganar.
 
 ### Criterios de éxito (Paso 5)
 
 1. Un archivo `.wav` por frase, con duración ≈ duración de la frase + 200 ms de margen (recortado en los bordes del archivo).
 2. Cortes precisos a nivel de muestra (sin corrimientos temporales) — **byte-exactos** contra los bytes del origen.
-3. Fragmentos WAV sin pérdida (mismo sample rate, canales y profundidad que el origen), con sus tiempos `{start, end}` reportados en el contrato.
+3. Fragmentos WAV PCM sin pérdida: mismo sample rate, canales y profundidad que el origen, y **conversión PCM→PCM bit-exacta** (nunca un códec con pérdida). Los tiempos `{start, end}` van reportados en el contrato.
 
 > **Nota sobre `Fragment.start`/`end`:** llevan los **tiempos reales del corte** (con margen ya aplicado y ajustados al audio), no los de la frase original. Así siempre describen el archivo al que apuntan y son verificables contra él. La frase que originó el corte conserva sus tiempos en `Phrase`, que llega intacta desde el paso 4.
 

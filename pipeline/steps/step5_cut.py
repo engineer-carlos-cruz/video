@@ -12,22 +12,21 @@ source, no process per phrase.
 
 Why ``atrim`` and not ``-ss``/``-to``
 -----------------------------------
-The PRD suggests ``-ss``/``-to``, and those are exact *when the audio is
-re-encoded*. What is not exact is the combination the PRD also implies,
-``-c:a copy``, which is what "sin re-encodeo con pérdida" would mean for a source
-that is already pcm_s16le. Measured on this machine (FFmpeg 8.0.1), every span
-came back 2304 samples (48 ms, one PCM packet) long: 1.0s..3.0s returned 2.048s
-of audio, 0.2537..0.7537 returned 0.512s. Seeks are resolved at packet
-granularity, and a wav stream is cut on packet boundaries, so the tail is never
-trimmed. Both input-side and output-side ``-ss`` behaved the same.
+The PRD suggests ``-ss``/``-to``. Those are exact when the audio is re-encoded,
+but not when the stream is copied with ``-c:a copy``: measured on this machine
+(FFmpeg 8.0.1), every span came back 2304 samples (48 ms, one PCM packet) long,
+so 1.0s..3.0s returned 2.048s of audio and 0.2537..0.7537 returned 0.512s.
+Seeks resolve at packet granularity and a wav stream is cut on packet boundaries,
+so the tail is never trimmed. Input-side and output-side ``-ss`` behaved the same.
 
 ``atrim=start_sample=..:end_sample=..`` works in sample indices instead, so the
 bounds are computed here in Python (``round(seconds * sample_rate)``) and the
-filter only has to obey them. Verified byte-exact against the source bytes at
-48 kHz/stereo and 44.1 kHz/mono, so criterion 2 ("no temporal drift") holds
-literally rather than approximately. It also keeps the "one invocation, one
-decode" property that made this step cheap, which a per-fragment ``-ss`` with
-``-c:a copy`` would preserve but a re-encode per fragment would not.
+filter only has to obey them. This is the path that reaches the PRD's "no lossy
+re-encode" requirement *and* exact cuts at once, because the two are compatible:
+the output is written as pcm_s16le, and a PCM to PCM conversion is bit-exact
+(verified byte for byte against the source at 48 kHz/stereo and 44.1 kHz/mono).
+There is no lossy codec anywhere in this step — only a change of container-level
+framing, never of the samples themselves.
 
 Bounds are clamped in Python *before* the filtergraph is built. FFmpeg treats an
 ``atrim`` that starts past EOF as a hard error that fails the whole invocation
@@ -39,9 +38,9 @@ Documented alternative
 Slicing the PCM directly in Python (``wave``/numpy, ``index = round(seconds *
 sample_rate)``) is byte-exact too and avoids the subprocess entirely, at the cost
 of loading and rewriting the file once per fragment. Not implemented: 100 cuts
-take ~0.23s in a single FFmpeg run here, which leaves nothing to gain, and the
-FFmpeg path is the one the PRD nominates. Revisit if the fragment count grows by
-an order of magnitude.
+take well under a second in a single FFmpeg run here, which leaves nothing to
+gain, and the FFmpeg path is the one the PRD nominates. Revisit if the fragment
+count grows by an order of magnitude.
 
 Decoupling note
 ---------------
