@@ -12,17 +12,22 @@ source, no process per phrase.
 
 Why ``atrim`` and not ``-ss``/``-to``
 -----------------------------------
-The PRD suggests ``-ss``/``-to``. Measured on this machine (FFmpeg 8.0.1) they
-are only trustworthy when the audio is re-encoded: with ``-c:a copy`` a request
-for 1.0s..3.0s of a 5s file came back with 2.048s of audio, and 0.2537..0.7537
-came back with 0.512s instead of 0.500s. Even when they do work, the result
-depends on how FFmpeg rounds the timestamps.
+The PRD suggests ``-ss``/``-to``, and those are exact *when the audio is
+re-encoded*. What is not exact is the combination the PRD also implies,
+``-c:a copy``, which is what "sin re-encodeo con pérdida" would mean for a source
+that is already pcm_s16le. Measured on this machine (FFmpeg 8.0.1), every span
+came back 2304 samples (48 ms, one PCM packet) long: 1.0s..3.0s returned 2.048s
+of audio, 0.2537..0.7537 returned 0.512s. Seeks are resolved at packet
+granularity, and a wav stream is cut on packet boundaries, so the tail is never
+trimmed. Both input-side and output-side ``-ss`` behaved the same.
 
 ``atrim=start_sample=..:end_sample=..`` works in sample indices instead, so the
 bounds are computed here in Python (``round(seconds * sample_rate)``) and the
 filter only has to obey them. Verified byte-exact against the source bytes at
 48 kHz/stereo and 44.1 kHz/mono, so criterion 2 ("no temporal drift") holds
-literally rather than approximately.
+literally rather than approximately. It also keeps the "one invocation, one
+decode" property that made this step cheap, which a per-fragment ``-ss`` with
+``-c:a copy`` would preserve but a re-encode per fragment would not.
 
 Bounds are clamped in Python *before* the filtergraph is built. FFmpeg treats an
 ``atrim`` that starts past EOF as a hard error that fails the whole invocation
