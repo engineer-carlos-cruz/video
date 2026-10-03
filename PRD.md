@@ -184,18 +184,32 @@ Detalle de los contratos:
 
 ### Solución (Paso 6)
 
-- **Base:** `llama.cpp` / `llama-cpp-python` (backend en C++).
-- **Modelo:** `Llama-3.2-1B-Instruct` (alternativa: `Qwen2.5-1.5B-Instruct`) en GGUF int4 (~1 GB), CPU.
-- **Enfoque:** traducción en lote de las frases de cada video en un solo prompt, con instrucción explícita de traducción equivalente/coloquial (p. ej. "I'm 20 years old" → "Tengo 20 años") y contexto del video para coherencia.
+- **Base:** `llama.cpp` (C++) detrás de `llama-server`, que expone una API HTTP compatible con OpenAI y devuelve JSON en vez de texto que haya que rascar de una terminal. `llama-cpp-python` integraría el backend en proceso (la redacción original de este PRD), pero no publica rueda para cp314; como el paso 6 vive detrás del contrato `Dataset`, cambiar de transporte después no toca nada más.
+- **Modelo:** `Qwen2.5-1.5B-Instruct` GGUF int4 (`Q4_K_M`, ~1.1 GB, 1715 MB RSS medidos con `-c 4096`). Alternativa: `Llama-3.2-1B-Instruct` (1253 MB RSS), que se cambia con una constante.
+  - **Por qué Qwen y no Llama:** la naturalidad es el criterio 1 de este paso. Medidas sobre las mismas seis frases, Qwen acertó todos los casos donde Llama-1B falló — "You look great today" → "Te ves genial hoy" (Llama: "Pareces muy bonito hoy") y "She is going to the store" → "Está saliendo al supermercado" (Llama: "Vámonos que vamos al supermercado"). Cuesta ~2.5× el tiempo por lote.
+- **Enfoque:** traducción en lote, con instrucción explícita de traducción equivalente/coloquial (p. ej. "I'm 20 years old" → "Tengo 20 años") y contexto del video para coherencia.
 - **Módulo:** `step6_translate` → `run(Phrases, Fragments, context) -> Dataset` (une cada frase con su audio y su traducción).
-- **Nota de eficiencia:** lote único evita el overhead de N inferencias; el backend C++ se integra desde el pipeline Python sin procesos externos.
+- **Etiquetado, no numeración:** cada frase lleva una etiqueta `[[n]]` que el modelo debe copiar, y la respuesta se parsea **por etiqueta**, nunca por posición de línea. Es lo que hace fiable el lote: medido con 14 frases, al pedirle "una línea numerada por frase" el modelo reescribió los números en palabras (`1.` → `Uno:`, `2.` → `Dos:`), y al pedirle un objeto JSON ignoró el esquema por completo y devolvió catorce copias de `{"n": 1, "v": "es"}`.
+- **Few-shot como turnos reales, no como texto:** los tres ejemplos van como turnos `user`/`assistant` genuinos, y eso no es cosmético. Aplanados en un solo mensaje de usuario, los ejemplos reutilizaban las etiquetas `[[1]]`..`[[3]]` que la petición reinicia, y el modelo devolvió un ejemplo como respuesta: "She is going to the store" volvió como "Vámonos que llegamos tarde", la traducción del ejemplo 2. Como turnos separados no hay colisión.
+  - Sin ejemplos, "I'm twenty years old" volvía como "Estoy 20 años" (criterio 1 incumplido) y una vez alucinó "veintiuno".
+- **Guardas sobre la respuesta** (todo esto son fallos reales medidos, no hipótesis):
+  - Una traducción que es básicamente un ejemplo es el modelo repitiendo, no traduciendo → se rechaza. La exención por frase fuente tiene que ser *difusa*: la lista de estudio dice "I'm twenty years old" donde el ejemplo dice "I'm 20 years old", y una comparación literal las daba por distintas, de modo que la respuesta de referencia del propio PRD ("Tengo 20 años") se marcó y se descartó. `canonical_source` pasa los números a cifras ("forty five" → "45", "twenty" → "20") antes de comparar.
+  - Una respuesta que sigue en inglés, o que esquiva el sujeto con "he/she/it", no es traducción → se rechaza.
+- **Alineación verificada, nunca supuesta:** cada etiqueta pedida debe volver exactamente una vez, con traducción no vacía. Un lote que no cuadra se reintenta **frase por frase**, que es donde un modelo pequeño es fiable. Medido con 100 frases: 15 hicieron falta reintentos individuales y las 100 salieron bien.
+- **Frases no traducidas** se listan en `.untranslated` con el motivo exacto y se dejan fuera del `Dataset`; el paso solo falla cuando *ninguna* frase sobrevive, igual que hace el paso 4 con una alineación completamente fallida.
+- **Servidor externo:** el paso comprueba `/health` y, si no responde, falla con instrucciones en vez de arrancar el servidor. Cargar el modelo cuesta segundos y más de un gigabyte, así que se reutiliza entre videos; el ciclo de vida del proceso es asunto del orquestador.
+- **Nota de eficiencia:** el lote evita N inferencias (medido: 6 frases en 8.6 s; 100 frases en 173 s, en CPU con 4 hilos).
 
 ### Criterios de éxito (Paso 6)
 
-1. Traducciones naturalmente idiomáticas, sin calcos literales ("Tengo 20 años", no "Yo soy 20 años viejo").
+1. Traducciones naturalmente idiomáticas, sin calcos literales ("Tengo 20 años", no "Yo soy 20 años viejo"). Verificado: "Tengo 20 años", "Te ves genial hoy", "Llevo dos años aprendiendo inglés".
 2. Coherencia de términos dentro de un mismo video (contexto compartido).
-3. Procesar ~100 frases por video en tiempo razonable con ~2 GB RAM en CPU.
+3. Procesar ~100 frases por video en tiempo razonable con ~2 GB RAM en CPU. Medido: 100/100 frases en 173 s con 1715 MB RSS.
 4. El `Dataset` contiene la información organizada (audio + EN + ES + tiempos) sin referencia al consumidor final.
+
+> **Nota sobre `Card.start`/`end`:** llevan los **tiempos reales del fragmento** (los mismos de `Fragment`), no los de la frase, para que `Card.audio` y `Card.start`/`end` describan el mismo archivo. Los tiempos de la frase en el video original siguen disponibles en `Phrase`.
+
+> **Límite conocido, medido:** con un modelo de 1–1.5B en int4 la calidad no es uniforme entre ejecuciones. "She is going to the store" y "We should leave now" se traducen bien de forma estable; otras formulaciones cambian entre corridas ("Pareces muy bonito hoy" / "Te ves genial hoy"). Las guardas descritas filteran lo que se puede medir —alineación, ejemplos repetidos, respuestas sin traducir— pero no pueden corregir un sentido equivocado. Subir de modelo es el arreglo; cambiar la constante `DEFAULT_MODEL` basta.
 
 ## 9. Paso 7: Exportación a Anki
 
@@ -229,7 +243,7 @@ Detalle de los contratos:
 3. **Transcripción** (`step3_transcribe`, faster-whisper `small`) → `Transcript` (palabras con `{start, end}`).
 4. **Tiempos de frases** (`step4_align`, matching por tokens) → `Phrases` (`{start, end}` por frase).
 5. **Fragmentos** (`step5_cut`, FFmpeg) → `Fragments` (`.wav` por frase con margen).
-6. **Dataset** (`step6_translate`, llama.cpp LLM 1–2B) → `Dataset` (información organizada: audio + EN + ES).
+6. **Dataset** (`step6_translate`, llama.cpp `llama-server` + Qwen2.5-1.5B int4) → `Dataset` (información organizada: audio + EN + ES).
 7. **Exportar Anki** (`step7_anki`, genanki) → `AnkiPackage` (`.apkg` con frente ES / reverso EN + audio).
 
 ## 11. Decisiones pendientes
@@ -237,3 +251,4 @@ Detalle de los contratos:
 - Formato de publicación final del audio (mp3, m4a, opus) si se requiere una salida distinta al WAV intermedio.
 - Nombrado del `.apkg` (por video/título). El de los fragmentos ya está resuelto en §7.
 - Mecanismo de persistencia intermedia (artefactos en disco) sin acoplar los contratos de memoria.
+- Modelo de traducción definitivo si la calidad de 1–1.5B int4 (criterio 1 del paso 6) resulta insuficiente.
