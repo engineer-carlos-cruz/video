@@ -85,6 +85,8 @@ Detalle de los contratos:
 - **Base:** C vía FFmpeg.
 - **Filtro principal:** `arnndn` (RNNoise) — state-of-the-art para supresión de ruido en voz, baja CPU, procesa WAV directo (internamente re-muestrea a 48 kHz y regresa).
 - **Módulo:** `step2_denoise` → `run(DownloadedAudio) -> CleanedAudio`.
+- **El límite del `atrim` se cuenta a 48 kHz, no en muestras del origen.** `arnndn` procesa en tramas de 480 muestras (10 ms a 48 kHz) y rellena la trama final incompleta; `atrim` restaura la duración exacta para que el audio siga alineado con el transcript. Pero el grafo corre a 48 kHz, así que `end_sample` está en muestras de la salida: usar el número de tramas de la entrada recortaba el audio a `frames/48000` segundos. El paso 1 no fija sample rate (`FFmpegExtractAudio` conserva el del origen, y 44.1 kHz es lo habitual en YouTube y Spotify), así que esto solo se veía con material real, no con los fixtures de prueba, que ya venían a 48 kHz.
+  - Medido antes del arreglo, con 3 s de entrada: 44.1 kHz → 2.756 s; 22.05 kHz → 1.378 s; 16 kHz → 1.000 s. Solo 48 kHz pasaba. La comprobación de deriva lo detectaba y el paso fallaba, así que el audio nunca salía corrupto — pero el pipeline se quedaba bloqueado con cualquier pista real. Corregido convirtiendo la duración: `round(duración × 48000)`.
 - **Alternativas documentadas:**
   - `afftdn` (FFmpeg): denoising espectral automático, más rápido aún, resultado aceptable.
   - `noisereduce` (Python): spectral gating, mayor control/calidad en casos complejos, más lento (numpy) y suele requerir una sección de "solo ruido" para aprender el perfil.
