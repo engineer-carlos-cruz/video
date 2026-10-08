@@ -226,8 +226,13 @@ Detalle de los contratos:
   - *Frente:* `{{Español}}` (el texto en español es lo primero que se muestra).
   - *Reverso:* `{{Inglés}}` + `{{Audio}}` (el campo `Audio` con `[sound:...]` muestra el botón de reproducir de Anki).
 - **Audios embebidos:** los fragmentos `.wav` van en `media_files` del paquete y se referencian como `[sound:<nombre>.wav]`.
+- **Nombre dentro del paquete:** es el `basename` del fragmento tal cual, sin renombrar ni copiar. El paso 5 ya los nombra `NNN_<slug>.wav` con `NNN` siendo la posición de la frase, así que los nombres son únicos incluso si dos frases comparten texto, y `Card.audio` sigue apuntando a un archivo real en disco.
+  - *Medido en `genanki` 0.13.1:* dentro del `.apkg` cada medio se guarda con un nombre de entrada **numérico** (`0`, `1`, `2`) y un manifiesto `media` que mapea índice → `basename`. El `[sound:<basename>]` de la nota resuelve a través de ese manifiesto, no por coincidencia de nombre en el zip.
+- **Identidad estable, no por ejecución:** el id del modelo (`MODEL_ID`) y el id del mazo (derivado por hash del nombre) son fijos. Un id regenerado por corrida haría que Anki crease un tipo de nota y un mazo duplicados en cada importación en vez de reutilizarlos. El `guid` de cada nota se deriva de `Card.id`, no de los valores de los campos, así que reimportar **actualiza** las notas en vez de duplicarlas.
+- **Validación previa:** cada `Card.audio` se comprueba con `probe_wav` (`pipeline/media.py`) antes de escribir nada. Una tarjeta con audio ausente o ilegible llegaría a Anki como un botón que no suena, que es un fallo invisible hasta el momento de estudiar. Dos tarjetas que colapsaran en el mismo nombre se rechazan en vez de escribirse.
 - **Módulo:** `step7_anki` → `run(Dataset, deck_name) -> AnkiPackage`.
 - **Nota:** la importación es única; no se reutiliza conexión con Anki ni add-ons.
+- **Ruta de salida (provisional):** `output/anki/<mazo>.apkg`. El nombre del `.apkg` sigue siendo una decisión abierta (§11); esta convención hace que una reejecución sobrescriba en vez de acumular paquetes.
 
 ### Criterios de éxito (Paso 7)
 
