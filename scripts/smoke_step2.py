@@ -127,6 +127,38 @@ def check_duration(workspace: Path) -> None:
     print("  ok")
 
 
+def check_sample_rates(workspace: Path) -> None:
+    print("== the duration holds whatever the input's sample rate ==")
+    # Regression. Every other fixture here is built with aresample=48000, which
+    # hid this: atrim=end_sample counts samples in the *output* stream (48 kHz),
+    # while before.frames counts them in the input. Step 1 keeps the source rate
+    # (44.1 kHz is typical for YouTube and Spotify), so a 3 s track came out
+    # 2.756 s and the step refused it. Measured truncations: 44100 -> 2.756 s,
+    # 22050 -> 1.378 s, 16000 -> 1.000 s.
+    for rate in (44100, 22050, 16000, 96000, 8000):
+        fixture = workspace / f"rate_{rate}.wav"
+        subprocess.run(
+            [
+                "ffmpeg", "-nostdin", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=220:duration=3",
+                "-ac", "1", "-ar", str(rate), str(fixture),
+            ],
+            check=True,
+        )
+        clean = Step2Denoise(output_dir=workspace).run(
+            DownloadedAudio(file=fixture, metadata=METADATA)
+        )
+        before = probe_wav(fixture)
+        after = probe_wav(clean.file)
+        drift = abs(after.duration - before.duration)
+        assert drift <= MAX_DURATION_DRIFT, (
+            f"{rate} Hz: {before.duration:.4f}s -> {after.duration:.4f}s "
+            f"(drift {drift * 1000:.1f} ms)"
+        )
+        print(f"  {rate:>5} Hz: {before.duration:.4f}s -> {after.duration:.4f}s  ok")
+    print("  ok")
+
+
 def check_format(workspace: Path) -> None:
     print("== output format ==")
     fixture = build_fixture(workspace / "format.wav")
@@ -238,6 +270,7 @@ if __name__ == "__main__":
         workspace = Path(tmp)
         check_snr(workspace)
         check_duration(workspace)
+        check_sample_rates(workspace)
         check_format(workspace)
         check_metadata(workspace)
         check_heavy_noise(workspace)

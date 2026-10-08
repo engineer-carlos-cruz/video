@@ -124,9 +124,19 @@ class Step2Denoise:
         # trailing partial frame, padding the output by up to 479 samples.
         # atrim restores the exact original length so the audio stays aligned
         # with the transcript timings.
+        #
+        # The bound is counted in the *output* stream's samples, which is
+        # TARGET_SAMPLE_RATE, not in the input's frame count. Step 1 does not
+        # fix a sample rate (FFmpegExtractAudio keeps the source's, and 44.1 kHz
+        # is the usual one for YouTube and Spotify), so using before.frames
+        # directly truncated the audio to frames/48000 seconds: a 3 s track at
+        # 44.1 kHz came out 2.756 s. Measured: 16 kHz and 22.05 kHz inputs lost
+        # even more. Converting the duration is what makes this hold for any
+        # input rate.
+        end_sample = round(before.duration * TARGET_SAMPLE_RATE)
         filter_chain = (
             f"arnndn=model={model_path.resolve()}:mix={self.mix},"
-            f"atrim=end_sample={before.frames},asetpts=PTS-STARTPTS"
+            f"atrim=end_sample={end_sample},asetpts=PTS-STARTPTS"
         )
         command = [
             "ffmpeg",
