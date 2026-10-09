@@ -344,6 +344,40 @@ def check_phrases_file(tmp: Path) -> None:
     print("  a missing or empty file is refused")
 
 
+def check_phrases_path_resolution(tmp: Path) -> None:
+    print("== a typed path resolves where the user means it ==")
+    import os
+
+    audio_dir = tmp / "output"
+    write_phrases(audio_dir / "frases.txt")
+    write_phrases(tmp / "cwd_ phrases.txt")
+
+    original_dir = Path.cwd()
+    try:
+        os.chdir(tmp)
+        # Relative to the working directory: the obvious reading of what was
+        # typed. Resolving this against the audio directory instead produced
+        # "output/output/frases.txt" and rejected the very path printed as the
+        # suggestion.
+        assert main_module._resolve_phrases("output/frases.txt", audio_dir) == Path(
+            "output/frases.txt"
+        )
+        print("  a cwd-relative path is taken as-is")
+
+        # A bare name is found next to the audio, which is where it is suggested.
+        assert main_module._resolve_phrases("frases.txt", audio_dir) == Path(
+            "frases.txt"
+        )
+        print("  a bare name is looked up beside the audio")
+
+        # An absolute path always wins.
+        absolute = (tmp / "cwd_ phrases.txt").resolve()
+        assert main_module._resolve_phrases(str(absolute), audio_dir) == absolute
+        print("  an absolute path is used unchanged")
+    finally:
+        os.chdir(original_dir)
+
+
 def check_prompts(tmp: Path) -> None:
     print("== the terminal questions ==")
     import builtins
@@ -456,6 +490,7 @@ if __name__ == "__main__":
         check_missing_server(workspace)
         check_failed_step_aborts(workspace)
         check_phrases_file(workspace)
+        check_phrases_path_resolution(workspace)
         check_prompts(workspace)
         check_deck_confirmation(workspace)
         check_exit_codes(workspace)

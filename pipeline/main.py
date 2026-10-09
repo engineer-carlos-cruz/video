@@ -79,6 +79,22 @@ def ask_url() -> str:
     return ask("URL del video (YouTube o Spotify): ")
 
 
+def _resolve_phrases(raw: str, audio_dir: Path) -> Path:
+    """Resolve what the user typed into an existing path.
+
+    A relative path is tried against the working directory first, because that
+    is what someone who typed it expects, and against the audio directory
+    second, since that is where the file is suggested to live. Resolving only
+    against the audio directory rejected the very path printed as a suggestion
+    ("output/frases.txt" became "output/output/frases.txt").
+    """
+    path = Path(raw).expanduser()
+    if path.is_absolute() or path.exists():
+        return path
+    beside_audio = audio_dir / path
+    return beside_audio if beside_audio.exists() else path
+
+
 def read_phrases(audio_dir: Path) -> list[str]:
     """Ask for the study phrases and load them from a ``.txt`` file.
 
@@ -95,17 +111,15 @@ def read_phrases(audio_dir: Path) -> list[str]:
         " ignoran).",
         flush=True,
     )
-    default = audio_dir / f"frases{PHRASES_SUFFIX}"
-    print(f"Sugerencia: créalo en {default}", flush=True)
+    print(f"Sugerencia: créalo en {audio_dir / f'frases{PHRASES_SUFFIX}'}", flush=True)
     print("", flush=True)
 
     while True:
         raw = ask("Ruta del fichero de frases: ")
-        path = Path(raw).expanduser()
-        if not path.is_absolute():
-            path = audio_dir / path
+        path = _resolve_phrases(raw, audio_dir)
         if not path.exists():
             print(f"   no existe: {path}", flush=True)
+            print("   (ruta absoluta, o relativa al directorio actual)", flush=True)
             continue
         if path.is_dir():
             print(f"   es un directorio, no un fichero: {path}", flush=True)
